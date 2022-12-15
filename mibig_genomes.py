@@ -1,17 +1,28 @@
+#!/usr/bin/env python3
+
 # script to find and download genomes associated with mibig
+
+# pip install biopython rich numpy
+
+
 from pathlib import Path
 import json
-from Bio import Entrez
-import numpy as np
 import math
-from rich.progress import Progress
 import os
 import urllib
+import hashlib
+import requests
 
-Entrez.email = os.environ['ENTREZ_EMAIL']
-Entrez.api_key = os.environ['ENTREZ_API']
+from Bio import Entrez
+import numpy as np
+from rich.progress import Progress
+
+
+Entrez.email = os.environ["ENTREZ_EMAIL"]
+Entrez.api_key = os.environ["ENTREZ_API"]
 json_dir = "/home/chase/Documents/data/mibig/3_1/mibig_json_3.1"
 outdir = "/home/chase/Documents/data/mibig/3_1/mibig_genomes"
+
 
 # get all json file paths
 pathlist = Path(json_dir).glob("*.json")
@@ -69,9 +80,20 @@ def get_assembly_summary(id):
     return esummary_record
 
 
-def get_assemblies(ids, download=True):
-    print(f"found {len(ids)} ids")
-    links = []
+def extract_md5sum_from_filetext(url, filename):
+    try:
+        md5_req = requests.get(url, stream=True)
+        md5 = [i.split("  ") for i in md5_req.text.split("\n")]
+        md5 = [i for i in md5 if len(i) == 2]
+        md5 = [i for i in md5 if i[1] == filename][0]
+        return md5
+    except:
+        return [["this is will fail md5sum", "this is will fail md5sum"]]
+
+
+def get_assemblies(ids, download=True, endswith="_genomic.gbff.gz"):
+    print(f"Downloading {len(ids)} genomes")
+    status = {"succeeded": [], "failed": []}
     for id in ids:
         # get summary
         summary = get_assembly_summary(id)
@@ -80,13 +102,26 @@ def get_assemblies(ids, download=True):
         if url == "":
             continue
         label = os.path.basename(url)
-        # get the fasta link - change this to get other formats
-        link = os.path.join(url, label + "_genomic.gbff.gz")
-        print(link)
-        links.append(link)
+        # get the assembly link - change this to get other formats
+        link = os.path.join(url, label + endswith)
+        link = link.replace("ftp://", "https://", 1)
+        md5_url = os.path.join(url, "md5checksums.txt")
+        md5_url = md5_url.replace("ftp://", "https://", 1)
         if download == True:
             # download link
-            urllib.request.urlretrieve(link, f"{Path(outdir)}/{label}.gbff.gz")
-    return links
+            outpath = Path(outdir, f"{label}.gbff.gz")
+            genome_req = requests.get(link)
+            expected_md5 = extract_md5sum_from_filetext(
+                url=md5_url, filename=f"./{label + endswith}"
+            )
+            if hashlib.md5(genome_req.content).hexdigest() == expected_md5[0]:
+                with open(outpath, "wb") as f:
+                    f.write(genome_req.content)
+                with open(Path(outdir, "md5sums"), "a") as f:
+                    f.writelines(f"{expected_md5[0]}  {expected_md5[1]}\n")
+                status["succeeded"].append(id)
+            else:
+                status["failed"].append(id)
+
 
 get_assemblies(set(temp))
